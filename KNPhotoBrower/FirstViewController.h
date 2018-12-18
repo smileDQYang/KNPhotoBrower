@@ -6,8 +6,8 @@
 //  Copyright © 2016年 LuKane. All rights reserved.
 //
 
-#import <UIKit/UIKit.h>
+#import "BaseViewController.h"
 
-@interface FirstViewController : UIViewController
+@interface FirstViewController : BaseViewController
 
 @end

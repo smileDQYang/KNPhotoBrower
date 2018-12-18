@@ -9,23 +9,23 @@
 #import "KNPhotoBrowerImageView.h"
 #import "UIImageView+WebCache.h"
 #import "KNProgressHUD.h"
+#import "KNPch.h"
+#import "UIImage+GIF.h"
 
 @interface KNPhotoBrowerImageView()<UIScrollViewDelegate>{
-    KNProgressHUD *_progressHUD;
     NSURL         *_url;
     UIImage       *_placeHolder;
 }
 
-@property (nonatomic, strong ) UILabel *reloadLabel; // 重新加载 Label
+@property (nonatomic, strong) FLAnimatedImageView *imageView;
 
 @end
 
-
 @implementation KNPhotoBrowerImageView
 
-- (UIImageView *)imageView{
+- (FLAnimatedImageView *)imageView{
     if (!_imageView) {
-        _imageView = [[UIImageView alloc] init];
+        _imageView = [[FLAnimatedImageView alloc] init];
         [_imageView setUserInteractionEnabled:YES];
         [_imageView setFrame:CGRectMake(0, 0, ScreenWidth, ScreenHeight)];
     }
@@ -43,26 +43,6 @@
     return _scrollView;
 }
 
-- (UILabel *)reloadLabel{
-    if (!_reloadLabel) {
-        _reloadLabel = [[UILabel alloc] init];
-        [_reloadLabel setBackgroundColor:[UIColor blackColor]];
-        [_reloadLabel.layer setCornerRadius:5];
-        [_reloadLabel setClipsToBounds:YES];
-        [_reloadLabel setFont:[UIFont fontWithName:@"Helvetica-Bold" size:18]];
-        [_reloadLabel setTextColor:[UIColor whiteColor]];
-        [_reloadLabel setTextAlignment:NSTextAlignmentCenter];
-        [_reloadLabel setBounds:(CGRect){CGPointZero,{100,35}}];
-        [_reloadLabel setText:@"重新加载"];
-        [_reloadLabel setCenter:(CGPoint){ScreenWidth * 0.5,ScreenHeight * 0.5}];
-        [_reloadLabel setHidden:YES];
-        [_reloadLabel setUserInteractionEnabled:YES];
-        [_reloadLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(reloadImageIBAction)]];
-        [self addSubview:_reloadLabel];
-    }
-    return _reloadLabel;
-}
-
 - (instancetype)initWithFrame:(CGRect)frame{
     
     if (self = [super initWithFrame:frame]) {
@@ -74,8 +54,9 @@
 
 - (void)initDefaultData{
     // 1.生产 两种 手势
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(scrollViewDidTap:)];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(scrollViewDidTap)];
     UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(scrollViewDidDoubleTap:)];
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(longPressDidPress:)];
     
     // 2.设置 手势的要求
     [tap setNumberOfTapsRequired:1];
@@ -89,12 +70,21 @@
     // 4.添加 手势
     [self addGestureRecognizer:tap];
     [self addGestureRecognizer:doubleTap];
+    [self addGestureRecognizer:longPress];
 }
 
 #pragma mark - 单击
-- (void)scrollViewDidTap:(UITapGestureRecognizer *)tap{
+- (void)scrollViewDidTap{
     if(_singleTapBlock){
-        _singleTapBlock(tap);
+        _singleTapBlock();
+    }
+}
+
+- (void)longPressDidPress:(UILongPressGestureRecognizer *)longPress{
+    if(longPress.state == UIGestureRecognizerStateBegan){
+        if(_longPressBlock){
+            _longPressBlock();
+        }
     }
 }
 
@@ -117,53 +107,49 @@
     }
 }
 
-- (void)sd_ImageWithUrl:(NSURL *)url placeHolder:(UIImage *)placeHolder{
+- (void)sd_ImageWithUrl:(NSURL *)url progressHUD:(KNProgressHUD *)progressHUD placeHolder:(UIImage *)placeHolder{
+    [progressHUD setHidden:true];
     
     _url         = url;
     _placeHolder = placeHolder;
     
-    __weak typeof(self) weakSelf = self;
-    SDWebImageManager *mgr = [SDWebImageManager sharedManager];
-    
-    // 尝试 从缓存里 拿出 图片
-    [[mgr imageCache] queryDiskCacheForKey:[url absoluteString] done:^(UIImage *image, SDImageCacheType cacheType) {
-        
-        if(_progressHUD){// 如果加载圈存在,则消失
-            [_progressHUD removeFromSuperview];
+    if(!url){
+        if([placeHolder isGIF]){
+            FLAnimatedImage *animatedImg = [FLAnimatedImage animatedImageWithGIFData:UIImagePNGRepresentation(placeHolder)];
+            _imageView.animatedImage = animatedImg;
+        }else{
+            [_imageView setImage:placeHolder];
         }
-        
-        if (image) { // 如果缓存中有图片, 则直接赋值
-            _imageView.image = image;
-        }else{// 缓存中没有图片, 则下载
-            // 加载圈 开始 出现
-            KNProgressHUD *progressHUD = [KNProgressHUD showHUDAddTo:self animated:YES];
-            _progressHUD = progressHUD;
-            
-            // SDWebImage 下载图片
-            [_imageView sd_setImageWithPreviousCachedImageWithURL:url placeholderImage:placeHolder options:SDWebImageRetryFailed progress:^(NSInteger receivedSize, NSInteger expectedSize) {
-                CGFloat progress = ((CGFloat)receivedSize / expectedSize);
+        [self layoutSubviews];
+        return;
+    }
+    [progressHUD setHidden:false];
+    __weak typeof(self) weakSelf = self;
+    UIImage *image = [[SDImageCache sharedImageCache] imageFromCacheForKey:[url absoluteString]];
+    if(image){
+        [progressHUD setHidden:true];
+    }
+    
+    // SDWebImage 下载图片
+    [_imageView sd_setImageWithURL:url placeholderImage:placeHolder options:SDWebImageRetryFailed progress:^(NSInteger receivedSize, NSInteger expectedSize, NSURL * _Nullable targetURL) {
+        CGFloat progress = ((CGFloat)receivedSize / expectedSize);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if(progressHUD){
                 progressHUD.progress = progress; // 设置 进度
-                if(progress == 1){ // 如果进度 == 1 , 则消失
-                    if(!progressHUD){
-                        [progressHUD dismiss];
-                    }
-                }
-            } completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
-                [_scrollView setZoomScale:1.f animated:YES];
-                if(error){
-                    [_progressHUD dismiss];
-                    [weakSelf.reloadLabel setHidden:NO];
-                }else{
-                    [weakSelf layoutSubviews];
-                }
-            }];
+            }
+        });
+    } completed:^(UIImage * _Nullable image, NSError * _Nullable error, SDImageCacheType cacheType, NSURL * _Nullable imageURL) {
+        [_scrollView setZoomScale:1.f animated:YES];
+        if(!error){
+            [progressHUD setProgress:1.f];
+            [weakSelf layoutSubviews];
+        }else{
+            [progressHUD setHidden:true];
         }
     }];
-}
-
-- (void)reloadImageIBAction{
-    [_reloadLabel setHidden:YES];
-    [self sd_ImageWithUrl:_url placeHolder:_placeHolder];
+    
+    [self layoutSubviews];
+    
 }
 
 - (void)layoutSubviews{
@@ -178,7 +164,6 @@
         
         CGSize imageSize = _imageView.image.size;
         CGRect imageFrame = CGRectMake(0, 0, imageSize.width, imageSize.height);
-        
         if (frame.size.width <= frame.size.height) { // 如果ScrollView的 宽 <= 高
             // 将图片的 宽 设置成 ScrollView的宽  ,高度 等比率 缩放
             CGFloat ratio = frame.size.width / imageFrame.size.width;
@@ -194,14 +179,13 @@
         }
         
         // 设置 imageView 的 frame
-        _imageView.frame = imageFrame;
+        [_imageView setFrame:(CGRect){CGPointZero,imageFrame.size}];
         
         // scrollView 的滚动区域
         _scrollView.contentSize = _imageView.frame.size;
         
         // 将 scrollView.contentSize 赋值为 图片的大小. 再获取 图片的中心点
         _imageView.center = [self centerOfScrollViewContent:_scrollView];
-        
         // 获取 ScrollView 高 和 图片 高 的 比率
         CGFloat maxScale = frame.size.height / imageFrame.size.height;
         // 获取 宽度的比率
@@ -209,11 +193,11 @@
         
         // 取出 最大的 比率
         maxScale = widthRadit > maxScale?widthRadit:maxScale;
-        // 如果 最大比率 >= 2 倍 , 则取 最大比率 ,否则去 2 倍
-        maxScale = maxScale > 2?maxScale:2;
+        // 如果 最大比率 >= PhotoBrowerImageMaxScale 倍 , 则取 最大比率 ,否则去 PhotoBrowerImageMaxScale 倍
+        maxScale = maxScale > PhotoBrowerImageMaxScale?maxScale:PhotoBrowerImageMaxScale;
         
         // 设置 scrollView的 最大 和 最小 缩放比率
-        _scrollView.minimumZoomScale = 0.6;
+        _scrollView.minimumZoomScale = PhotoBrowerImageMinScale;
         _scrollView.maximumZoomScale = maxScale;
         
         // 设置 scrollView的 原始缩放大小
